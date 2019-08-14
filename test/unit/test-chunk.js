@@ -49,7 +49,6 @@ describe('chunk', () => {
           // Make sure we make a chunk instance, so all runs
           // have a viewer.
           chunkInstanceForTesting(env.win.document);
-          return Promise.resolve();
         });
       }
     });
@@ -338,7 +337,7 @@ describe('chunk', () => {
   );
 });
 
-describe('long tasks', () => {
+describe.skip('taskQueues', () => {
   describes.fakeWin(
     'long chunk tasks force a macro task between work',
     {
@@ -360,29 +359,28 @@ describe('long tasks', () => {
         };
       }
 
-      function runSubs() {
-        subscriptions['message']
-          .slice()
-          .forEach(method => method({data: 'amp-macro-task'}));
-      }
-
       beforeEach(() => {
         subscriptions = {};
         sandbox = sinon.sandbox;
         clock = sandbox.useFakeTimers();
         toggleExperiment(env.win, 'macro-after-long-task', true);
 
-        env.win.addEventListener = function(type, handler) {
-          if (subscriptions[type] && !subscriptions[type].includes(handler)) {
-            subscriptions[type].push(handler);
-          } else {
-            subscriptions[type] = [handler];
-          }
-        };
-
-        env.win.postMessage = function(key) {
-          expect(key).to.equal('amp-macro-task');
-        };
+        if (!env.win.addEventListener || !env.win.postMessage) {
+          env.win.addEventListener = function(type, handler) {
+            if (subscriptions[type] && !subscriptions[type].includes(handler)) {
+              subscriptions[type].push(handler);
+            } else {
+              subscriptions[type] = [handler];
+            }
+          };
+          env.win.postMessage = function(key) {
+            if (subscriptions['message']) {
+              subscriptions['message']
+                .slice()
+                .forEach(method => method({data: key}));
+            }
+          };
+        }
 
         progress = '';
       });
@@ -391,34 +389,43 @@ describe('long tasks', () => {
         sandbox.restore();
       });
 
-      it('should not run macro tasks with invisible bodys', done => {
-        startupChunk(env.win.document, complete('init', true));
-        startupChunk(env.win.document, complete('a', true));
-        startupChunk(env.win.document, complete('b', true));
+      it('should execute chunks after long task in a macro task', done => {
+        startupChunk(env.win.document, complete('a', false));
         startupChunk(env.win.document, () => {
-          expect(progress).to.equal('initab');
-          done();
+          expect(progress).to.equal('a');
+          complete('b', true)();
+          startupChunk(env.win.document, complete('c', false));
+        });
+        env.win.addEventListener('message', e => {
+          if (e.data == 'amp-macro-task') {
+            expect(progress).to.equal('abc');
+            done();
+          }
         });
       });
 
-      it('should execute chunks after long task in a macro task', done => {
-        startupChunk(env.win.document, complete('before', true));
-        startupChunk(
-          env.win.document,
-          complete('init', false),
-          /* make body visible */ true
-        );
+      it('should execute chunks after a macro task in micro tasks', done => {
+        let macroTasksCalled = 0;
 
-        startupChunk(env.win.document, complete('a', false));
-        startupChunk(env.win.document, complete('b', false));
         startupChunk(env.win.document, () => {
-          expect(progress).to.equal('beforeinitab');
-          complete('c', true)();
-          runSubs();
+          complete('a', true)();
+          startupChunk(env.win.document, complete('b', false));
         });
-        startupChunk(env.win.document, () => {
-          expect(progress).to.equal('beforeinitabc');
-          done();
+        env.win.addEventListener('message', e => {
+          if (e.data == 'amp-macro-task') {
+            macroTasksCalled++;
+
+            expect(macroTasksCalled).to.equal(1);
+            expect(progress).to.equal('ab');
+
+            if (macroTasksCalled < 2) {
+              startupChunk(env.win.document, complete('c', false));
+              startupChunk(env.win.document, () => {
+                expect(progress).to.equal('abc');
+                done();
+              });
+            }
+          }
         });
       });
     }

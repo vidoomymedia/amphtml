@@ -56,21 +56,13 @@ function chunkServiceForDoc(elementOrAmpDoc) {
  *
  * @param {!Document} document
  * @param {function(?IdleDeadline)} fn
- * @param {boolean=} opt_makesBodyVisible Pass true if this service makes
- *     the body visible. This is relevant because it may influence the
- *     task scheduling strategy.
  */
-export function startupChunk(document, fn, opt_makesBodyVisible) {
+export function startupChunk(document, fn) {
   if (deactivated) {
     resolved.then(fn);
     return;
   }
   const service = chunkServiceForDoc(document.documentElement);
-  if (opt_makesBodyVisible) {
-    service.runForStartup(() => {
-      service.bodyIsVisible_ = true;
-    });
-  }
   service.runForStartup(fn);
 }
 
@@ -243,16 +235,29 @@ class StartupTask extends Task {
   /**
    * @param {function(?IdleDeadline)} fn
    * @param {!Window} win
-   * @param {!Chunks} chunks
+   * @param {!Promise<!./service/viewer-impl.Viewer>} viewerPromise
    */
-  constructor(fn, win, chunks) {
+  constructor(fn, win, viewerPromise) {
     super(fn);
 
-    /** @private @const */
+    /** @private {!Window} */
     this.win_ = win;
 
-    /** @private @const */
-    this.chunks_ = chunks;
+    /** @private {?./service/viewer-impl.Viewer} */
+    this.viewer_ = null;
+
+    viewerPromise.then(viewer => {
+      this.viewer_ = viewer;
+
+      if (this.viewer_.isVisible()) {
+        this.runTask_(/* idleDeadline */ null);
+      }
+      this.viewer_.onVisibilityChanged(() => {
+        if (this.viewer_.isVisible()) {
+          this.runTask_(/* idleDeadline */ null);
+        }
+      });
+    });
   }
 
   /** @override */
@@ -274,7 +279,7 @@ class StartupTask extends Task {
     // been initialized. Otherwise we risk starving ourselves
     // before we get into a state where the viewer can tell us
     // that we are visible.
-    return !!this.chunks_.viewer;
+    return !!this.viewer_;
   }
 
   /**
@@ -283,8 +288,8 @@ class StartupTask extends Task {
    */
   isVisible_() {
     // Ask the viewer first.
-    if (this.chunks_.viewer) {
-      return this.chunks_.viewer.isVisible();
+    if (this.viewer_) {
+      return this.viewer_.isVisible();
     }
     // There is no viewer yet. Lets try to guess whether we are visible.
     if (this.win_.document.hidden) {
@@ -309,6 +314,9 @@ class Chunks {
     this.tasks_ = new PriorityQueue();
     /** @private @const {function(?IdleDeadline)} */
     this.boundExecute_ = this.execute_.bind(this);
+
+    /** @private @const {!Promise<!./service/viewer-impl.Viewer>} */
+    this.viewerPromise_ = Services.viewerPromiseForDoc(ampDoc);
     /** @private {number} */
     this.timeSinceLastExecution_ = Date.now();
     /** @private {boolean} */
@@ -316,36 +324,11 @@ class Chunks {
       this.win_,
       'macro-after-long-task'
     );
-    /**
-     * Set to true if we scheduled a macro or micro task to execute the next
-     * task. If true, we don't schedule another one.
-     * Not set to true if we use rIC, because we always want to transition
-     * to immeditate invocation from that state.
-     * @private {boolean}
-     */
-    this.scheduledImmediateInvocation_ = false;
-    /** @private {boolean} Whether the document can actually be painted. */
-    this.bodyIsVisible_ = this.win_.document.documentElement.hasAttribute(
-      'i-amphtml-no-boilerplate'
-    );
 
     this.win_.addEventListener('message', e => {
       if (getData(e) == 'amp-macro-task') {
         this.execute_(/* idleDeadline */ null);
       }
-    });
-
-    /** @private @const {!Promise<!./service/viewer-impl.Viewer>} */
-    this.viewerPromise_ = Services.viewerPromiseForDoc(ampDoc);
-    /**  @protected {?./service/viewer-impl.Viewer} */
-    this.viewer = null;
-    this.viewerPromise_.then(viewer => {
-      this.viewer = viewer;
-      viewer.onVisibilityChanged(() => {
-        if (viewer.isVisible()) {
-          this.schedule_();
-        }
-      });
     });
   }
 
@@ -364,7 +347,7 @@ class Chunks {
    * @param {function(?IdleDeadline)} fn
    */
   runForStartup(fn) {
-    const t = new StartupTask(fn, this.win_, this);
+    const t = new StartupTask(fn, this.win_, this.viewerPromise_);
     this.enqueueTask_(t, Number.POSITIVE_INFINITY);
   }
 
@@ -376,7 +359,9 @@ class Chunks {
    */
   enqueueTask_(task, priority) {
     this.tasks_.enqueue(task, priority);
-    this.schedule_();
+    resolved.then(() => {
+      this.schedule_();
+    });
   }
 
   /**
@@ -408,21 +393,17 @@ class Chunks {
    * @private
    */
   execute_(idleDeadline) {
-    this.scheduledImmediateInvocation_ = false;
     const t = this.nextTask_(/* opt_dequeue */ true);
     if (!t) {
       return false;
     }
-    try {
-      const before = Date.now();
-      this.timeSinceLastExecution_ = before;
-      t.runTask_(idleDeadline);
-      dev().fine(TAG, t.getName_(), 'Chunk duration', Date.now() - before);
-    } finally {
-      resolved.then(() => {
-        this.schedule_();
-      });
-    }
+    const before = Date.now();
+    this.timeSinceLastExecution_ = before;
+    t.runTask_(idleDeadline);
+    resolved.then(() => {
+      this.schedule_();
+    });
+    dev().fine(TAG, t.getName_(), 'Chunk duration', Date.now() - before);
     return true;
   }
 
@@ -437,7 +418,6 @@ class Chunks {
     // 5 milliseconds is a magic number.
     if (
       this.macroAfterLongTask_ &&
-      this.bodyIsVisible_ &&
       Date.now() - this.timeSinceLastExecution_ > 5
     ) {
       this.requestMacroTask_();
@@ -453,15 +433,11 @@ class Chunks {
    * @private
    */
   schedule_() {
-    if (this.scheduledImmediateInvocation_) {
-      return;
-    }
     const nextTask = this.nextTask_();
     if (!nextTask) {
       return;
     }
     if (nextTask.immediateTriggerCondition_()) {
-      this.scheduledImmediateInvocation_ = true;
       this.executeAsap_(/* idleDeadline */ null);
       return;
     }
