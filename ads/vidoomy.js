@@ -65,8 +65,8 @@ export function vidoomy(global, data) {
   lkqdStartObject.pid = pid;
   lkqdStartObject.sid = sid;
 
- // launchLKQD(lkqdStartObject, global);
-  addIframe(global);
+  launchLKQD(lkqdStartObject, global);
+ // addIframe(global);
 }
 
 function addIframe(w) {
