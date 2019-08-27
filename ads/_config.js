@@ -1028,6 +1028,8 @@ const adConfig = jsonConfiguration({
     renderStartImplemented: true,
   },
 
+  'vidoomy': {},
+
   'viralize': {
     renderStartImplemented: true,
   },
