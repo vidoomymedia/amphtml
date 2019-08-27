@@ -24,20 +24,19 @@ export function vidoomy(global, data) {
   const mandatoryAttributes = ['pid', 'sid'];
   const optionalAttributes = ['xtra-lkqd-settings'];
 
-  global._lkqd_ad_attributes = {
+  global._lkqdAdAttributes = {
     mandatory: mandatoryAttributes,
     optional: optionalAttributes,
-    data
-  }
+    data: data,
+  };
 
   validateData(
     data,
-    global._lkqd_ad_attributes.mandatory,
-    global._lkqd_ad_attributes.optional
+    global._lkqdAdAttributes.mandatory,
+    global._lkqdAdAttributes.optional
   );
 
   loadScript(
-    global,
-    'https://www.vidoomy.com/tests/amp-ad-js/lkqd-amp-ad.js'
+    global, 'https://www.vidoomy.com/tests/amp-ad-js/lkqd-amp-ad.js'
   );
 }
