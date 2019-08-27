@@ -27,7 +27,7 @@ export function vidoomy(global, data) {
   global._lkqdAdAttributes = {
     mandatory: mandatoryAttributes,
     optional: optionalAttributes,
-    data: data,
+    data,
   };
 
   validateData(
@@ -36,7 +36,5 @@ export function vidoomy(global, data) {
     global._lkqdAdAttributes.optional
   );
 
-  loadScript(
-    global, 'https://www.vidoomy.com/tests/amp-ad-js/lkqd-amp-ad.js'
-  );
+  loadScript(global, 'https://www.vidoomy.com/tests/amp-ad-js/lkqd-amp-ad.js');
 }
